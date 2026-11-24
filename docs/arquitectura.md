@@ -3,17 +3,20 @@
 El dispensador tiene tres partes. El **iPhone** es la interfaz y aporta la identidad con Face ID. La **laptop** verifica la firma y transporta órdenes. La **DE10-Lite** toma todas las decisiones.
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph IPHONE["iPhone · Safari"]
+        direction LR
         UI["Página del dispensador"]
         FACE["Face ID<br/>passkey (llave privada)"]
     end
     subgraph LAPTOP["Laptop"]
+        direction LR
         CF["cloudflared<br/>túnel HTTPS"]
         SRV["Servidor Flask<br/>verifica WebAuthn"]
         STP["quartus_stp<br/>Tcl In-System Sources & Probes"]
     end
     subgraph FPGA["DE10-Lite · MAX 10"]
+        direction LR
         ISSP["jtag_link<br/>source 32 b / probe 224 b"]
         CMD["cmd_ctrl<br/>roles · sesión · rangos"]
         INF["infusion_ctrl<br/>lazo de goteo · alarmas"]
