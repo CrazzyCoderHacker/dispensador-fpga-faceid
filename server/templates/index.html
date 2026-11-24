@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dispensador FPGA</title>
+<style>
+  :root { --bg:#f4f6f8; --card:#fff; --text:#17212b; --muted:#5b6875; --line:#d9dee4;
+          --accent:#0b6e75; --danger:#b42318; --ok:#1f7a3a; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,system-ui,sans-serif; background:var(--bg); color:var(--text); }
+  header { background:#12324a; color:#fff; padding:14px 18px; }
+  header h1 { margin:0; font-size:19px; font-weight:600; }
+  header p { margin:2px 0 0; font-size:13px; opacity:.8; }
+  main { max-width:720px; margin:0 auto; padding:14px; display:grid; gap:14px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  h2 { margin:0 0 10px; font-size:16px; }
+  .big { font-size:30px; font-weight:700; }
+  .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+  .k { font-size:12px; color:var(--muted); }
+  .v { font-size:18px; font-weight:600; }
+  .alarm { background:#fdecea; color:var(--danger); border:1px solid #f4b8b2; border-radius:10px;
+           padding:12px; font-weight:700; margin-bottom:10px; }
+  button { font:inherit; font-size:16px; padding:12px 14px; border-radius:10px; border:1px solid var(--line);
+           background:#fff; color:var(--text); cursor:pointer; min-height:46px; }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  button.danger { background:var(--danger); color:#fff; border-color:var(--danger); }
+  .row { display:flex; flex-wrap:wrap; gap:8px; }
+  .row > * { flex:1 1 140px; }
+  label { display:block; font-size:13px; color:var(--muted); margin-bottom:4px; }
+  input, select { width:100%; font:inherit; font-size:16px; padding:10px; border:1px solid var(--line); border-radius:8px; }
+  .form { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-bottom:10px; }
+  #msg { padding:10px 12px; border-radius:10px; display:none; font-weight:600;
+         position:sticky; top:8px; z-index:10; box-shadow:0 2px 8px rgba(0,0,0,.12); }
+  #msg.ok { display:block; background:#e8f5ec; color:var(--ok); }
+  #msg.err { display:block; background:#fdecea; color:var(--danger); }
+  ol { margin:0; padding-left:0; list-style:none; font-size:14px; }
+  ol li { padding:6px 0; border-bottom:1px solid var(--line); }
+  ol li span { color:var(--muted); font-variant-numeric:tabular-nums; margin-right:8px; }
+  .pill { display:inline-block; padding:3px 10px; border-radius:99px; font-size:13px; background:#e6f1f2; color:var(--accent); }
+  details summary { cursor:pointer; font-weight:600; }
+  button.on { background:#fff4e5; border-color:#d97706; color:#92400e; font-weight:700; }
+  ol.guide { list-style:decimal; padding-left:22px; margin-top:10px; }
+  ol.guide li { border-bottom:none; padding:5px 0; line-height:1.4; }
+  code { background:#eef1f4; padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Dispensador de medicamento con FPGA</h1>
+  <p>Autenticacion con Face ID &middot; control en la DE10-Lite</p>
+</header>
+<main>
+  <div id="msg"></div>
+
+  <section>
+    <h2>Estado de la FPGA</h2>
+    <div id="alarm" class="alarm" style="display:none"></div>
+    <div class="big" id="state">-</div>
+    <div style="margin:6px 0 12px" id="session"><span class="pill">Sin sesion de enfermeria</span></div>
+    <div class="grid">
+      <div><div class="k">Entregado</div><div class="v" id="ml">-</div></div>
+      <div><div class="k">Velocidad</div><div class="v" id="rate">-</div></div>
+      <div><div class="k">Volumen total</div><div class="v" id="vtbi">-</div></div>
+      <div><div class="k">Bomba</div><div class="v" id="pump">-</div></div>
+      <div><div class="k">Bloqueo de bolo</div><div class="v" id="lock">-</div></div>
+      <div><div class="k">Bolos en la hora</div><div class="v" id="bcount">-</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Enfermeria</h2>
+    <div class="row" style="margin-bottom:12px">
+      <button class="primary" onclick="faceId('login')">Entrar con Face ID</button>
+      <button onclick="cmd('logout')">Cerrar sesion</button>
+    </div>
+    <div class="form">
+      <div><label>Velocidad (mL/h)</label><input id="p_rate" type="number" inputmode="numeric" value="360"></div>
+      <div><label>Volumen a infundir (mL)</label><input id="p_vtbi" type="number" inputmode="numeric" value="10"></div>
+      <div><label>Bolo (mL, 0 = sin bolos)</label><input id="p_bolus" type="number" inputmode="numeric" value="1"></div>
+      <div><label>Bloqueo entre bolos (min)</label><input id="p_lock" type="number" inputmode="numeric" value="5"></div>
+      <div><label>Bolos maximos por hora</label><input id="p_maxh" type="number" inputmode="numeric" value="2"></div>
+      <div><label>Paciente</label><select id="p_patient"><option value="0">Sin paciente asignado</option></select></div>
+    </div>
+    <div class="row">
+      <button onclick="program()">Cargar programa</button>
+      <button class="primary" onclick="cmd('start')">Iniciar</button>
+      <button onclick="cmd('clear')">Atender alarma / bolsa nueva</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Paciente</h2>
+    <div class="row">
+      <button class="primary" onclick="faceId('bolus')">Pedir bolo con Face ID</button>
+      <button class="danger" onclick="cmd('pause')">Pausar infusion</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Simulador de fallas (demostracion)</h2>
+    <p class="k" style="margin-top:0">Simula lo que pasaria fisicamente en el cuarto. La FPGA lo detecta sola y
+      dispara la alarma. Tambien se puede hacer con SW7, SW6 y SW5 de la tarjeta.</p>
+    <div class="row">
+      <button id="sim1" onclick="toggleSim(1)">Abrir la llave a mano</button>
+      <button id="sim2" onclick="toggleSim(2)">Tapar tubo / bolsa vacia</button>
+      <button id="sim4" onclick="toggleSim(4)">Abrir el gabinete</button>
+    </div>
+    <p class="k" id="simstate" style="margin-bottom:0"></p>
+  </section>
+
+  <section>
+    <details>
+      <summary>Guion de la presentacion</summary>
+      <ol class="guide">
+        <li><b>Infusion correcta.</b> Enfermera: Entrar con Face ID, Cargar programa (paciente 55), Iniciar.
+          Tarjeta: <code>ru</code>, LEDR1 bomba y LEDR2 parpadea con cada gota; los mL suben.</li>
+        <li><b>Intentos no autorizados.</b> Sin sesion toca Iniciar o Cargar programa: se rechaza.
+          Pon velocidad 2000 y carga: la FPGA lo rechaza por rango.</li>
+        <li><b>Bolo del paciente.</b> Paciente: Pedir bolo con Face ID, se concede (LEDR3).
+          Pidelo otra vez: se niega por bloqueo (LEDR4). La enfermera tambien es rechazada.</li>
+        <li><b>Flujo libre.</b> Cierra la sesion y toca "Abrir la llave a mano":
+          <code>AL FrEE</code>, LEDR9, bomba apagada. Quita la falla y atiende como enfermera.</li>
+        <li><b>Bolsa vacia / tubo tapado.</b> Inicia otra vez y toca "Tapar tubo": a los 5 s
+          <code>AL noFL</code>. Quita la falla, Atender alarma, Iniciar.</li>
+        <li><b>Gabinete abierto sin permiso.</b> Sin sesion toca "Abrir el gabinete": <code>AL tAPA</code>.
+          Con sesion de enfermera abrir el gabinete NO da alarma.</li>
+        <li><b>Pausa y fin.</b> Pausar (cualquiera puede) o KEY1 en la tarjeta. Al terminar el volumen: <code>dn</code>.</li>
+      </ol>
+      <p class="k">Una alarma solo la quita una enfermera con Face ID, y vuelve a sonar si la falla sigue presente.</p>
+    </details>
+  </section>
+
+  <section>
+    <h2>Bitacora</h2>
+    <ol id="events"></ol>
+  </section>
+
+  <section>
+    <details>
+      <summary>Registrar una cara (administrador)</summary>
+      <div class="form" style="margin-top:12px">
+        <div><label>Nombre</label><input id="r_name" placeholder="Ana Lopez"></div>
+        <div><label>Rol</label><select id="r_role"><option value="enfermera">Enfermera (ID 1-49)</option><option value="paciente">Paciente (ID 50-99)</option></select></div>
+        <div><label>ID</label><input id="r_id" type="number" inputmode="numeric" value="3"></div>
+        <div><label>PIN de administrador</label><input id="r_pin" inputmode="numeric" placeholder="se muestra en la laptop"></div>
+      </div>
+      <button class="primary" onclick="register()">Registrar con Face ID</button>
+      <p class="k" id="users"></p>
+    </details>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const b64u = {
+  toBuf: (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), c => c.charCodeAt(0)),
+  fromBuf: (b) => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
+};
+
+function show(ok, text) {
+  const m = $('msg');
+  m.className = ok ? 'ok' : 'err';
+  m.textContent = text;
+  clearTimeout(show.t);
+  show.t = setTimeout(() => { m.className = ''; }, 6000);
+}
+
+async function post(url, body) {
+  const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  let data = {};
+  try { data = await r.json(); } catch (e) {}
+  if (!r.ok && !data.msg) data.msg = data.error || ('Error ' + r.status);
+  return data;
+}
+
+async function register() {
+  try {
+    const opts = await post('/api/register/options', { name: $('r_name').value, role: $('r_role').value, id: $('r_id').value, pin: $('r_pin').value });
+    if (opts.error) return show(false, opts.error);
+    opts.challenge = b64u.toBuf(opts.challenge);
+    opts.user.id = b64u.toBuf(opts.user.id);
+    (opts.excludeCredentials || []).forEach(c => c.id = b64u.toBuf(c.id));
+    const cred = await navigator.credentials.create({ publicKey: opts });
+    const r = await post('/api/register/verify', {
+      id: cred.id, rawId: b64u.fromBuf(cred.rawId), type: cred.type,
+      response: { clientDataJSON: b64u.fromBuf(cred.response.clientDataJSON),
+                  attestationObject: b64u.fromBuf(cred.response.attestationObject),
+                  transports: cred.response.getTransports ? cred.response.getTransports() : [] },
+      clientExtensionResults: cred.getClientExtensionResults(),
+      authenticatorAttachment: cred.authenticatorAttachment,
+    });
+    show(!r.error, r.msg || r.error);
+  } catch (e) { show(false, 'Registro cancelado: ' + e.message); }
+}
+
+async function faceId(purpose) {
+  try {
+    const opts = await post('/api/auth/options', { purpose });
+    if (opts.error) return show(false, opts.error);
+    opts.challenge = b64u.toBuf(opts.challenge);
+    (opts.allowCredentials || []).forEach(c => c.id = b64u.toBuf(c.id));
+    const cred = await navigator.credentials.get({ publicKey: opts });
+    const r = await post('/api/auth/verify', {
+      id: cred.id, rawId: b64u.fromBuf(cred.rawId), type: cred.type,
+      response: { clientDataJSON: b64u.fromBuf(cred.response.clientDataJSON),
+                  authenticatorData: b64u.fromBuf(cred.response.authenticatorData),
+                  signature: b64u.fromBuf(cred.response.signature),
+                  userHandle: cred.response.userHandle ? b64u.fromBuf(cred.response.userHandle) : null },
+      clientExtensionResults: cred.getClientExtensionResults(),
+      authenticatorAttachment: cred.authenticatorAttachment,
+    });
+    show(!!r.ok, r.msg || r.error);
+    refresh();
+  } catch (e) { show(false, 'Face ID cancelado: ' + e.message); }
+}
+
+async function program() {
+  const r = await post('/api/program', {
+    rate_mlh: $('p_rate').value, vtbi_ml: $('p_vtbi').value, bolus_ml: $('p_bolus').value,
+    lockout_min: $('p_lock').value, max_per_hour: $('p_maxh').value, patient_id: $('p_patient').value,
+  });
+  show(!!r.ok, r.msg); refresh();
+}
+
+async function cmd(name) {
+  const r = await post('/api/cmd/' + name);
+  show(!!r.ok, r.msg); refresh();
+}
+
+let simFlags = 0;
+async function toggleSim(bit) {
+  const r = await post('/api/sim', { flags: simFlags ^ bit });
+  show(!!r.ok, r.msg); refresh();
+}
+
+let lastUsers = '';
+async function refresh() {
+  try {
+    const s = await (await fetch('/api/status')).json();
+    $('state').textContent = s.state_text;
+    $('alarm').style.display = s.alarm ? 'block' : 'none';
+    $('alarm').textContent = 'ALARMA: ' + s.alarm_text;
+    $('session').innerHTML = s.session
+      ? `<span class="pill">Sesion abierta: enfermera ID ${s.session_id} (${s.session_left_s} s)</span>`
+      : '<span class="pill">Sin sesion de enfermeria</span>';
+    $('ml').textContent = s.delivered_ml + ' mL';
+    $('rate').textContent = s.rate_mlh + ' mL/h';
+    $('vtbi').textContent = s.vtbi_ml + ' mL';
+    $('pump').textContent = s.pump_on ? 'Encendida' : 'Apagada';
+    $('lock').textContent = s.lockout_left ? s.lockout_left + ' min' : 'Libre';
+    $('bcount').textContent = s.bolus_count + ' de ' + s.max_per_hour;
+    simFlags = s.sim_flags;
+    [1, 2, 4].forEach(b => $('sim' + b).classList.toggle('on', !!(s.sim_flags & b)));
+    const act = [];
+    if (s.valve_open) act.push('llave abierta');
+    if (s.occluded) act.push('tubo tapado / bolsa vacia');
+    if (s.lid_sim) act.push('gabinete abierto');
+    $('simstate').textContent = act.length ? 'Fallas activas: ' + act.join(', ') + ' (toca otra vez para quitarlas)' : 'Sin fallas simuladas.';
+    $('events').innerHTML = s.events.map(e => `<li><span>${e[0]}</span>${e[1]}</li>`).join('');
+    const u = JSON.stringify(s.users);
+    if (u !== lastUsers) {
+      lastUsers = u;
+      const sel = $('p_patient'), cur = sel.value;
+      sel.innerHTML = '<option value="0">Sin paciente asignado</option>' +
+        s.users.filter(x => x.role === 'paciente').map(x => `<option value="${x.id}">${x.name} (ID ${x.id})</option>`).join('');
+      sel.value = cur;
+      $('users').textContent = s.users.length
+        ? 'Registrados: ' + s.users.map(x => `${x.name} (${x.role} ${x.id})`).join(', ')
+        : 'Todavia no hay caras registradas.';
+    }
+  } catch (e) {}
+}
+setInterval(refresh, 700);
+refresh();
+</script>
+</body>
+</html>

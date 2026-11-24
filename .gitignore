@@ -1,0 +1,35 @@
+# Datos locales: passkeys registradas (nombres y llaves publicas de personas)
+server/usuarios.json
+
+# Configuracion local del editor / asistentes
+.claude/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Simulacion (se regenera con bash sim/run_all.sh)
+sim/build/
+
+# Quartus: bases de datos y reportes con rutas locales.
+# Se conservan solo los archivos de programacion y los resumenes.
+quartus/db/
+quartus/incremental_db/
+quartus/output_files/*
+!quartus/output_files/dispensador.sof
+!quartus/output_files/dispensador.pof
+!quartus/output_files/*.summary
+quartus/*.qws
+quartus/*.bak
+
+# LaTeX (tectonic / pdflatex)
+reporte/*.aux
+reporte/*.log
+reporte/*.out
+reporte/*.toc
+reporte/*.synctex.gz
+
+# Capturas temporales del navegador headless
+*.tmp
