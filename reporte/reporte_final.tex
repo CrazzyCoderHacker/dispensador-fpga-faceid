@@ -189,7 +189,7 @@ Manipulación & Gabinete abierto sin sesión de enfermería & \code{AL tAPA} \\
 
 Los controles de la tarjeta se asignaron de la siguiente forma. KEY0 reinicia el sistema y KEY1 pausa la infusión localmente. SW9 activa el modo demostración, en el que un minuto clínico dura un segundo. SW7, SW6 y SW5 simulan la llave abierta, el tubo tapado y el gabinete abierto, y SW1--SW0 eligen el valor mostrado. Los displays HEX5--HEX4 muestran el estado (\code{id}, \code{ru}, \code{PA}, \code{AL}, \code{dn}) y HEX3--HEX0 el valor o el nombre de la alarma. Los LEDs indican sesión (LEDR0), bomba (LEDR1), gota (LEDR2), bolo concedido (LEDR3), orden rechazada (LEDR4), gabinete abierto (LEDR5) y alarma (LEDR9).
 
-\subsection{Enlace laptop--FPGA por JTAG}
+\subsection{Protocolo de comunicación por JTAG}\label{sec:jtag}
 El bloque \emph{In-System Sources and Probes} de Quartus agrega al diseño registros que la laptop lee y escribe por la cadena JTAG \cite{issp,jtag}. El servidor ejecuta \code{quartus\_stp} en modo interactivo y usa los comandos Tcl \code{write\_source\_data} y \code{read\_probe\_data} del paquete \code{::quartus::insystem\_source\_probe}, descritos en la interfaz Tcl del mismo bloque \cite{issp}. No se usó UART, Wi-Fi ni ningún otro módulo.
 
 Cada orden es una palabra de 32 bits con el formato \code{[31:24]} secuencia, \code{[23:20]} operación y \code{[19:0]} argumento. La FPGA sincroniza la palabra con tres registros, la ejecuta cuando la secuencia cambia y permanece estable en dos muestras, y publica en la sonda el número de secuencia atendido y un código de resultado. La Tabla~\ref{tab:ordenes} lista las operaciones. La sonda de 224 bits contiene además el estado, la alarma, la sesión, los parámetros, el volumen entregado, el bloqueo restante y un historial de los cuatro últimos eventos con contador, con el que el servidor reconstruye la bitácora.
@@ -217,6 +217,30 @@ Los códigos de resultado son 0 (aceptada), 1 (el ID no es de enfermería), 2 (s
 
 Elegimos este enlace porque la DE10-Lite ya trae el USB-Blaster integrado \cite{de10lite}: con un solo cable programamos la FPGA y mandamos las órdenes, sin comprar un módulo UART o Wi-Fi. A cambio, el sistema depende de que la laptop siga conectada por USB y tenga Quartus instalado, porque todas las órdenes pasan por \code{quartus\_stp}.
 
+Cada orden sigue el mismo intercambio. Primero, el servidor abre la conexión una sola vez al arrancar: busca el USB-Blaster con \code{get\_hardware\_names}, el MAX~10 con \code{get\_device\_names} e inicia el acceso con \code{start\_insystem\_source\_probe}. Después, para mandar una orden, incrementa el número de secuencia, arma la palabra de 32 bits y la escribe con \code{write\_source\_data}. La FPGA solo la ejecuta cuando la secuencia cambia y la palabra se mantiene igual en dos muestras seguidas, así que una escritura a medias nunca se ejecuta y una misma orden nunca se repite. Al terminar, la FPGA copia la secuencia atendida y el código de resultado en la sonda. Por último, el servidor lee la sonda con \code{read\_probe\_data} hasta encontrar su número de secuencia; si no aparece en 2~s, reporta que la FPGA no respondió. Una lectura completa de la sonda tarda unos 7~ms en la tarjeta. La Tabla~\ref{tab:sonda} resume el contenido de la sonda.
+
+\begin{table}[H]
+\centering
+\caption{Mapa del registro de estado (sonda de 224 bits).}
+\label{tab:sonda}
+\begin{tabular}{ll|ll}
+\toprule
+\textbf{Bits} & \textbf{Campo} & \textbf{Bits} & \textbf{Campo} \\
+\midrule
+\code{[7:0]} & Secuencia atendida & \code{[83:76]} & ID del paciente asignado \\
+\code{[11:8]} & Código de resultado & \code{[91:84]} & Bloqueo restante (min) \\
+\code{[14:12]} & Estado de la infusión & \code{[95:92]} & Bolos en la última hora \\
+\code{[16:15]} & Alarma & \code{[103:96]} & Sesión restante (s) \\
+\code{[17]} & Sesión activa & \code{[111:104]} & Contador de eventos \\
+\code{[25:18]} & ID de la enfermera & \code{[207:112]} & Últimos 4 eventos (24 bits c/u) \\
+\code{[35:26]} & mL entregados & \code{[208]} & Bomba encendida \\
+\code{[45:36]} & Velocidad (mL/h) & \code{[209]} & Gabinete abierto \\
+\code{[55:46]} & Volumen (mL) & \code{[212:210]} & Fallas presentes \\
+\code{[75:56]} & Bolo, bloqueo y máx./hora & \code{[215:213]} & Fallas pedidas por el panel \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 \subsection{Servidor y Face ID}\label{sec:servidor}
 El servidor se escribió en Python con Flask \cite{flask} y la biblioteca \code{py\_webauthn} \cite{pywebauthn}. Sus funciones son:
 \begin{itemize}
@@ -227,6 +251,44 @@ El servidor se escribió en Python con Flask \cite{flask} y la biblioteca \code{
 \end{itemize}
 
 Para obtener HTTPS con nombre de dominio sin comprar ni configurar un servidor, la página se publicó con un túnel rápido de Cloudflare \cite{cloudflare}, que asigna una dirección \code{https://*.trycloudflare.com} temporal. El iPhone abre esa dirección en Safari con datos móviles o cualquier red Wi-Fi.
+
+\subsection{Página segura (HTTPS)}\label{sec:https}
+WebAuthn solo funciona en un contexto seguro, es decir, en una página servida por HTTPS con nombre de dominio \cite{webauthn}. Con la dirección IP de la laptop, Safari no permite crear ni usar passkeys. Para resolverlo usamos el túnel rápido de Cloudflare \cite{cloudflare}. El programa \code{cloudflared} abre desde la laptop una conexión de salida hacia Cloudflare, y Cloudflare publica la página en una dirección \code{https://*.trycloudflare.com} con su propio certificado. De esta forma, la conexión entre el iPhone y Cloudflare va cifrada con TLS, la conexión entre Cloudflare y la laptop viaja dentro del túnel, y no tuvimos que abrir puertos en la red ni comprar un dominio o un certificado.
+
+El servidor sigue escuchando solo en el puerto 5000 de la laptop. Para validar cada firma toma el dominio y el protocolo con los que el iPhone abrió la página (cabeceras \code{X-Forwarded-Host} y \code{X-Forwarded-Proto}) y los usa como identificador del sitio (RP ID) y como origen esperado. Así, una firma hecha para otro dominio no se acepta. La desventaja es que la dirección del túnel cambia cada vez que se reinicia \code{cloudflared}, y como cada passkey queda ligada a esa dirección, hay que registrar de nuevo los rostros.
+
+\subsection{Medidas de seguridad y retroalimentación de la FPGA}\label{sec:seguridad}
+Diseñamos la seguridad en capas, de modo que una orden indebida tenga que pasar varias revisiones antes de afectar la infusión. La Tabla~\ref{tab:seguridad} resume cada medida y dónde se aplica.
+
+\begin{table}[H]
+\centering
+\caption{Medidas de seguridad del dispensador.}
+\label{tab:seguridad}
+\begin{tabularx}{\linewidth}{lX}
+\toprule
+\textbf{Medida} & \textbf{Qué evita} \\
+\midrule
+\multicolumn{2}{l}{\textit{iPhone y servidor}} \\
+Passkey con Face ID obligatorio (UV) & Que alguien firme sin que el iPhone reconozca su rostro \\
+Autenticador de la plataforma y credencial residente & Que se use una llave externa en lugar del Face ID del teléfono \\
+Reto aleatorio de un solo uso & Que se reenvíe una firma vieja capturada antes \\
+Verificación de origen, dominio y contador de firmas & Firmas hechas para otra página o credenciales clonadas \\
+PIN de administrador para registrar rostros & Que cualquiera registre su cara como enfermera \\
+Roles en el servidor & Que un paciente programe la bomba o que una enfermera pida el bolo del paciente \\
+\midrule
+\multicolumn{2}{l}{\textit{FPGA}} \\
+Sesión de enfermería de 120~s & Que una sesión olvidada quede abierta \\
+IDs por rol (1--49 y 50--99) & Que un ID de paciente abra sesión de enfermería \\
+Rangos de cada parámetro & Velocidades o volúmenes peligrosos, aunque el servidor falle \\
+Paciente asignado y limitador de bolos & Bolos de otra persona, dentro del bloqueo o sobre el máximo por hora \\
+Pausa siempre permitida & Que una falla de autenticación impida detener la bomba \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+La FPGA no confía en el servidor: vuelve a revisar sesión, roles, rangos y paciente asignado en cada orden. Por eso, si la laptop llegara a enviar una orden indebida, la FPGA la rechazaría aunque la firma de Face ID hubiera sido válida.
+
+La FPGA también le regresa al sistema el resultado de todo lo que hace, por tres caminos. El primero es el acuse de cada orden: la secuencia atendida y un código de resultado (aceptada, ID que no es de enfermería, sin sesión, fuera de rango, rostro de otro paciente u orden desconocida), con el que el servidor arma el mensaje que ve el usuario en el iPhone. El segundo es la bitácora: la FPGA guarda los últimos cuatro eventos con un contador, y el servidor detecta los eventos nuevos para mostrarlos en la página, como sesiones, parámetros cambiados, bolos concedidos o negados, alarmas y órdenes rechazadas. En el caso del bolo, el servidor espera este evento antes de responder, porque el acuse solo indica que la orden llegó y no si el limitador la concedió. El tercero es la propia tarjeta: los displays muestran el estado y la alarma, y los LEDs indican sesión, bomba, gota, bolo concedido, orden rechazada, gabinete abierto y alarma, de modo que el estado se puede revisar aunque la laptop esté desconectada.
 
 \subsection{Entorno de pruebas}
 La síntesis, el ajuste y el análisis de tiempos se realizaron con Quartus Prime Lite Edition 25.1 para el dispositivo 10M50DAF484C7G. La simulación se realizó con Icarus Verilog \cite{iverilog}, sustituyendo el bloque JTAG por un modelo cuyo registro de fuente escribe el banco de pruebas. De esta forma, la prueba de sistema actúa como la laptop: manda órdenes y lee la sonda con el mismo mapa de bits que usa el servidor. El servidor se probó con un autenticador de software P-256 que genera respuestas WebAuthn válidas y alteradas.
@@ -375,7 +437,8 @@ La división de funciones planteada permitió cumplir con el objetivo de que la 
 
 El uso del cable de programación como canal de datos evitó tener que agregar módulos de comunicación, aunque tiene como desventaja que la laptop debe permanecer conectada y con Quartus instalado. En un equipo real, el mismo protocolo de órdenes podría trasladarse a UART o Ethernet sin necesidad de modificar las reglas implementadas en la FPGA.
 
-\textbf{Limitaciones.} La principal limitación del proyecto es que la bomba, la cámara de goteo y las fallas se simulan dentro de la FPGA, por lo que los resultados obtenidos demuestran la lógica de control y no el comportamiento hidráulico del equipo. De igual forma, la orden SIM existe únicamente para la demostración y no requiere autenticación, por lo que en un producto sería necesario eliminarla y leer sensores reales. Otro punto a considerar es que el servidor confía en la laptop para verificar las firmas; un atacante con control de la laptop podría abrir una sesión sin rostro, aunque seguiría limitado por los rangos y los límites de bolos de la FPGA. Por último, el túnel rápido cambia de dirección cada vez que se inicia, lo que obliga a registrar de nuevo los rostros, ya que cada passkey queda ligada a un dominio; para un uso continuo convendría contar con un dominio fijo.
+\subsection{Limitaciones}\label{sec:limitaciones}
+La principal limitación del proyecto es que la bomba, la cámara de goteo y las fallas se simulan dentro de la FPGA, por lo que los resultados obtenidos demuestran la lógica de control y no el comportamiento hidráulico del equipo. De igual forma, la orden SIM existe únicamente para la demostración y no requiere autenticación, por lo que en un producto sería necesario eliminarla y leer sensores reales. Otro punto a considerar es que el servidor confía en la laptop para verificar las firmas; un atacante con control de la laptop podría abrir una sesión sin rostro, aunque seguiría limitado por los rangos y los límites de bolos de la FPGA. Por último, el túnel rápido cambia de dirección cada vez que se inicia, lo que obliga a registrar de nuevo los rostros, ya que cada passkey queda ligada a un dominio; para un uso continuo convendría contar con un dominio fijo.
 
 % =============================================================== 4 CONCLUSIONES
 \section{Conclusiones}\label{sec:conclusiones}
